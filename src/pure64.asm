@@ -72,11 +72,6 @@ start32:
 	stosd
 	stosd				; Write 8 bytes in total to overwrite the 'far jump'
 
-	mov edi, 0x5000			; Clear the info map
-	xor eax, eax
-	mov cx, 512
-	rep stosd
-
 	xor eax, eax			; Clear all 32-bit registers
 	xor ebx, ebx
 	xor ecx, ecx
@@ -145,7 +140,7 @@ rtc_poll:
 ; Clear out the first 32KiB of memory. This will store the 64-bit IDT, GDT, PML4, PDP Low, and PDP High
 	mov ecx, 8192
 	xor eax, eax
-	mov edi, eax
+	xor edi, edi
 	rep stosd
 
 ; Clear memory for the Page Descriptor Entries (0x10000 - 0x5FFFF)
