@@ -9,6 +9,7 @@
 USE16
 
 init_smp_ap:
+	cld				; Clear the direction flag
 	jmp 0x0000:clearcs_ap
 
 clearcs_ap:
@@ -156,7 +157,6 @@ clearcs64_ap:
 	stosb
 	sti				; Activate interrupts for SMP
 	jmp ap_sleep
-
 
 align 16
 

@@ -52,6 +52,8 @@ USE16
 ; 32-bit mode
 USE32
 start32:
+	cld				; Clear the direction flag
+
 	mov eax, 16			; Set the correct segment registers
 	mov ds, ax
 	mov es, ax
@@ -59,17 +61,23 @@ start32:
 	mov fs, ax
 	mov gs, ax
 
-	mov edi, 0xb8000		; Clear the screen
+	mov edi, 0xb8000		; Clear the legacy VGA screen memory
 	mov ax, 0x0720
 	mov cx, 2000
 	rep stosw
+
+; Patch Pure64 AP code			; The AP's will be told to start execution at 0x8000
+	mov edi, start			; We need to remove the BSP Jump call to get the APs
+	mov eax, 0x90909090		; to fall through to the AP Init code
+	stosd
+	stosd				; Write 8 bytes in total to overwrite the 'far jump'
 
 	mov edi, 0x5000			; Clear the info map
 	xor eax, eax
 	mov cx, 512
 	rep stosd
 
-	xor eax, eax			; Clear all registers
+	xor eax, eax			; Clear all 32-bit registers
 	xor ebx, ebx
 	xor ecx, ecx
 	xor edx, edx
@@ -134,8 +142,8 @@ rtc_poll:
 	mov dx, 0x03F8 + 2
 	out dx, al
 
-; Clear out the first 20KiB of memory. This will store the 64-bit IDT, GDT, PML4, PDP Low, and PDP High
-	mov ecx, 5120
+; Clear out the first 32KiB of memory. This will store the 64-bit IDT, GDT, PML4, PDP Low, and PDP High
+	mov ecx, 8192
 	xor eax, eax
 	mov edi, eax
 	rep stosd
@@ -155,7 +163,6 @@ rtc_poll:
 ; First create a PML4 entry.
 ; PML4 is stored at 0x0000000000002000, create the first entry there
 ; A single PML4 entry can map 512GB with 2MB pages.
-	cld
 	mov edi, 0x00002000		; Create a PML4 entry for the first 4GB of RAM
 	mov eax, 0x00003007		; location of low PDP
 	stosd
@@ -278,12 +285,6 @@ clearcs64:
 
 	lgdt [GDTR64]			; Reload the GDT
 
-; Patch Pure64 AP code			; The AP's will be told to start execution at 0x8000
-	mov edi, start			; We need to remove the BSP Jump call to get the AP's
-	mov eax, 0x90909090		; to fall through to the AP Init code
-	stosd
-	stosb				; Write 5 bytes in total to overwrite the 'far jump'
-
 ; Create the high PD entries
 	mov rax, 0x000000000000008F	; Bits 0 (P), 1 (R/W), 2 (U/S), 3 (PWT), and 7 (PS) set
 	mov rdi, 0x0000000000020000	; Location of high PD entries
@@ -298,7 +299,6 @@ pd_high:
 
 ; Build a temporary IDT
 	xor rdi, rdi 			; create the 64-bit IDT (at linear address 0x0000000000000000)
-
 	mov rcx, 32
 make_exception_gates: 			; make gates for exception handlers
 	mov rax, exception_gate
@@ -372,24 +372,13 @@ make_interrupt_gates: 			; make gates for the other interrupts
 
 	lidt [IDTR64]			; load IDT register
 
-; Clear memory 0xf000 - 0xf7ff for the infomap (2048 bytes)
-	xor rax, rax
-	mov rcx, 256
-	mov rdi, 0x000000000000F000
-clearmapnext:
-	stosq
-	dec rcx
-	cmp rcx, 0
-	jne clearmapnext
-
 	call init_acpi			; Find and process the ACPI tables
 
 	call init_cpu			; Configure the BSP CPU
 
 	call init_pic			; Configure the PIC(s), also activate interrupts
 
-; Init of SMP
-	call init_smp
+	call init_smp			; Init of SMP
 
 ; Reset the stack to the proper location (was set to 0x8000 previously)
 	mov rsi, [os_LocalAPICAddress]	; We would call os_smp_get_id here but the stack is not ...
@@ -488,7 +477,6 @@ nextIOAPIC:
 	rep movsq			; Copy 8 bytes at a time
 
 ; Output message via serial port
-	cld				; Clear the direction flag.. we want to increment through the string
 	mov dx, 0x03F8			; Address of first serial port
 	mov rsi, message		; Location of message
 	mov cx, 11			; Length of message
