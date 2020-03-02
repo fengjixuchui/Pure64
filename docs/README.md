@@ -7,7 +7,7 @@ This manual has the purpose of helping software developers understand how they s
 
 This manual assumes you have some understanding of a typical boot process.
 
-You'll have to have GCC and NASM installed to build the software and Doxygen for the documentation.
+You'll have to have NASM installed to build the software.
 
 
 ## Building
@@ -15,8 +15,7 @@ You'll have to have GCC and NASM installed to build the software and Doxygen for
 In the top directory of Pure64, just run the following:
 
 ```
-make
-sudo make install
+./build.sh
 ```
 
 
@@ -36,6 +35,7 @@ Once it's loaded, it enters an infinite loop.
 The file can be called `kernel.asm`.
 
 ```
+BITS 64
 ORG 0x100000
 
 start:
@@ -64,57 +64,74 @@ void _start(void) {
 }
 ```
 
+The kernel needs a linker script to be loaded to 1 MiB, replacing NASMs `ORG` instruction.
+The file can be called `kernel.ld`.
+
+```
+OUTPUT_FORMAT("binary")
+OUTPUT_ARCH("i386:x86-64")
+
+SECTIONS
+{
+    . = 0x100000;
+    .text : {
+        *(.text)
+    }
+    .data : {
+        *(.data)
+    }
+    .rodata : {
+        *(.rodata)
+    }
+    .bss : {
+        *(.bss)
+    }
+}
+
+```
+
 Compile is like this:
 
 ```
-gcc kernel.c -o kernel -mno-red-zone -fno-stack-protector -fomit-frame-pointer
+gcc -c kernel.c -o kernel.o -mno-red-zone -fno-stack-protector -fomit-frame-pointer
+ld -T kernel.ld -o kernel.bin kernel.o
 ```
 
-The flags added to the command are there to help GCC produce could that will run in kernel space.
+The flags added to the first command are there to help GCC produce could that will run in kernel space.
+The second command simply takes kernel.o and orders it as the linker script tells it to.
 
+## Contributors note
 
-## Creating a Disk Image
-
-Once Pure64 is installed, you'll have to create the configuration file for the disk image.
-
-Here's a very simple one:
-
-    arch: x86_64
-    bootsector: mbr
-    partition_scheme: gpt
-
-It creates a disk image for x86_64 systems, using MBR bootsector, formatted with a GPT partition table.
-Name the file `pure64-config.txt` for now.
-You can now do this to create the image.
-
+The `_start` symbol must always appear first within flat binaries as Pure64 will call the start of the file so it must contain executable code. Function definitions (such as inline ones) in header files could interfere with the placement of the `_start` symbol. The best solution is to put the entry point in a separate file that calls the main function. Such a file could be called `start.c`.
 ```
-pure64 init
-pure64 cp my-kernel.bin /boot/kernel
+extern int main(void);
+
+void _start(void)
+{
+    main();
+}
+```
+This file would **always** have to be linked in front of everything else. For the above example that would mean the linker command above would have to become:
+```
+ld -T kernel.ld -o kernel.bin start.o kernel.o
 ```
 
-Here's a breakdown of what these commands are doing.
+## Creating a bootable image
 
- - `init` reads `pure64-config.txt` and creates `pure64.img` based on the variables in there.
- - `cp` copies a file from the host system to the disk image. In this case, it copies the kernel.
-
-When the kernel is loaded, it is loaded at the address `0x100000`. They entry point must be at the beginning of the binary.
-
-The ELF file format is also supported, just as long as it is found at `/boot/kernel`.
-If the kernel is formatted with ELF, then the entry point is defined by the ELF file and the load address is specified by the program headers.
-The load address in the ELF file should be at least `0x100000`.
-
-
-## Running the Disk Image with QEMU
-
-To run the disk image with qemu, enter the Pure64 directory and run `test.sh`.
-Like this:
+After creating a kernel this is a possible routine to create a bootable image.
+The commands require Pure64 to be build and `pure64.sys` and `mbr.sys` to be in the same directory 
+as your kernel with the name `kernel.bin`
 
 ```
-pure64 init
-pure64 cp my-kernel.bin /boot/kernel
-./test.sh
+dd if=/dev/zero of=disk.img count=128 bs=1048576
+cat pure64.sys kernel.bin > software.sys
+
+dd if=mbr.sys of=disk.img conv=notrunc
+dd if=software.sys of=disk.img bs=512 seek=16 conv=notrunc
 ```
 
+After creating a bootable image it can be tested using qemu:
+`qemu-system-x86_64 -drive format=raw,file=disk.img`
 
 ## Memory Map
 
@@ -125,18 +142,18 @@ This memory map shows how physical memory looks after Pure64 is finished.
 <tr><td>0x0000000000000000</td><td>0x0000000000000FFF</td><td>4 KiB</td><td>IDT - 256 descriptors (each descriptor is 16 bytes)</td></tr>
 <tr><td>0x0000000000001000</td><td>0x0000000000001FFF</td><td>4 KiB</td><td>GDT - 256 descriptors (each descriptor is 16 bytes)</td></tr>
 <tr><td>0x0000000000002000</td><td>0x0000000000002FFF</td><td>4 KiB</td><td>PML4 - 512 entries, first entry points to PDP at 0x3000</td></tr>
-<tr><td>0x0000000000003000</td><td>0x0000000000003FFF</td><td>4 KiB</td><td>PDP Low - 512 enties</td></tr>
-<tr><td>0x0000000000004000</td><td>0x0000000000004FFF</td><td>4 KiB</td><td>PDP High - 512 enties</td></tr>
+<tr><td>0x0000000000003000</td><td>0x0000000000003FFF</td><td>4 KiB</td><td>PDP Low - 512 entries</td></tr>
+<tr><td>0x0000000000004000</td><td>0x0000000000004FFF</td><td>4 KiB</td><td>PDP High - 512 entries</td></tr>
 <tr><td>0x0000000000005000</td><td>0x0000000000007FFF</td><td>12 KiB</td><td>Pure64 Data</td></tr>
 <tr><td>0x0000000000008000</td><td>0x000000000000FFFF</td><td>32 KiB</td><td>Pure64 - After the OS is loaded and running this memory is free again</td></tr>
-<tr><td>0x0000000000010000</td><td>0x000000000001FFFF</td><td>64 KiB</td><td>PD Low</td></tr>
-<tr><td>0x0000000000020000</td><td>0x000000000005FFFF</td><td>256 KiB</td><td>PD High</td></tr>
+<tr><td>0x0000000000010000</td><td>0x000000000001FFFF</td><td>64 KiB</td><td>PD Low - Entries are 8 bytes per 2MiB page</td></tr>
+<tr><td>0x0000000000020000</td><td>0x000000000005FFFF</td><td>256 KiB</td><td>PD High - Entries are 8 bytes per 2MiB page</td></tr>
 <tr><td>0x0000000000060000</td><td>0x000000000009FFFF</td><td>256 KiB</td><td>Free</td></tr>
 <tr><td>0x00000000000A0000</td><td>0x00000000000FFFFF</td><td>384 KiB</td><td>ROM Area</td></tr>
 <tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>VGA mem at 0xA0000 (128 KiB) Color text starts at 0xB8000</td></tr>
 <tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>Video BIOS at 0xC0000 (64 KiB)</td></tr>
 <tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>Motherboard BIOS at F0000 (64 KiB)</td></tr>
-<tr><td>0x0000000000100000</td><td>0xFFFFFFFFFFFFFFFF</td><td>1+ MiB</td><td>Your software is loaded here</td></tr>
+<tr><td>0x0000000000100000</td><td>0xFFFFFFFFFFFFFFFF</td><td>1+ MiB</td><td>The software payload is loaded here</td></tr>
 </table>
 
 When creating your Operating System or Demo you can use the sections marked free, however it is the safest to use memory above 1 MiB.
